@@ -3,7 +3,7 @@ from openai import OpenAI
 import os
 
 # --- Secure API Key Handling ---
-openai_api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = os.getenv(openaiapikey)
 if not openai_api_key:
     st.error("Please set your OPENAI_API_KEY environment variable.")
     st.stop()
