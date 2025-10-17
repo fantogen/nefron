@@ -1,111 +1,78 @@
-import streamlit as st
-from openai import OpenAI
+# app.py
 import os
+import time
+import streamlit as st
+from google import genai
+from openai import OpenAI
 
-# --- Secure API Key Handling ---
-openai_api_key = os.getenv(openaiapikey)
-if not openai_api_key:
-    st.error("Please set your OPENAI_API_KEY environment variable.")
-    st.stop()
+GEM_MODEL = "gemini-1.5-flash"  # pick a free-tier friendly model from pricing docs
+OPENAI_MODEL = "gpt-4o-mini"    # keep cheap/concise; enforce token caps
 
-client = OpenAI(api_key=openai_api_key)
+st.title("Prompt Optimizer MVP")
 
-# --- Streamlit Page Setup ---
-st.set_page_config(
-    page_title="Nefron - AI Prompt Orchestrator",
-    page_icon="🧠",
-    layout="wide"
-)
-st.title("🧠 NEFRON – Multi-AI Prompt Orchestrator")
-st.markdown("""
-Nefron (Next Evolutionary Framework for Refining and Orchestrating Narratives) is an **AI prompt optimizer and intelligent router**.
+task = st.text_area("Describe your task")
+style = st.selectbox("Style", ["creative", "step-by-step", "structured"])
+max_tokens = st.slider("Max output tokens", 128, 2048, 512)
+use_openai_if_needed = st.checkbox("Escalate to OpenAI if low quality", value=False)
 
-- **Optimizes** prompts for best results.
-- **Splits** complex tasks into subtasks.
-- **Assigns** subtasks to specialist AI models.
-- **Merges** all responses into a single output.
-""")
+def draft_prompt(task, style):
+    return f"""
+You are a prompt engineer.
+Rewrite the following task into a precise, creative prompt with:
+- Clear role and goal
+- Step-by-step plan
+- Constraints (tone, format, length)
+- Few-shot examples if useful
+- Verification checklist
 
-# --- User Input ---
-prompt = st.text_area("Enter your task for Nefron:")
+Task: {task}
+Style: {style}
+Output: A single optimized prompt string only.
+""".strip()
 
-# --- Model Routing Logic ---
-def route_task(subtask):
-    subtask = subtask.lower()
-    if "image" in subtask or "picture" in subtask:
-        return "DALL·E"
-    elif "music" in subtask or "sound" in subtask:
-        return "MusicGen"
-    elif "code" in subtask or "program" in subtask:
-        return "GPT-5"
-    elif "analyze" in subtask or "data" in subtask:
-        return "Gemini"
-    else:
-        return "Claude"
+def llm_call_gemini(txt):
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    resp = client.models.generate_content(model=GEM_MODEL, contents=txt)
+    return resp.text
 
-# --- Error Handling Utility ---
-def safe_openai_chat(prompt, model="gpt-4o-mini"):
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"Error querying OpenAI: {e}")
-        return ""
+def llm_call_openai(txt):
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": txt}],
+        max_tokens=max_tokens,
+        temperature=0.7,
+    )
+    return resp.choices[0].message.content
 
-# --- Main Execution ---
-if st.button("🚀 Run Nefron"):
-    if not prompt.strip():
-        st.warning("⚠️ Please enter a prompt first.")
-    else:
-        # Step 1: Optimize the prompt
-        st.info("🔍 Step 1: Optimizing your prompt...")
-        optimizer_prompt = f"Improve this prompt to make it detailed, clear, and structured:\n\n{prompt}"
-        optimized_prompt = safe_openai_chat(optimizer_prompt)
-        if not optimized_prompt:
-            st.stop()
+def judge_quality(prompt_str, task):
+    judge_instruction = f"""
+Judge if this optimized prompt will likely solve the task:
+- Criteria: relevance, clarity, constraints, testability (0-10 each)
+- Return: JSON with scores and a brief fix suggestion
+Task: {task}
+Prompt: {prompt_str}
+Only return JSON.
+"""
+    # Cheap judge: Gemini by default
+    return llm_call_gemini(judge_instruction)
 
-        st.subheader("✨ Optimized Prompt:")
-        st.write(optimized_prompt)
+if st.button("Generate Prompt"):
+    base = draft_prompt(task, style)
+    # Respect Gemini rate limits: 5 RPM → simple sleep in busy loops; here single call
+    draft = llm_call_gemini(base)
+    verdict = judge_quality(draft, task)
+    st.subheader("Draft")
+    st.code(draft)
 
-        # Step 2: Split into subtasks
-        st.info("🧩 Step 2: Analyzing and splitting tasks...")
-        analysis_prompt = (
-            "Split this prompt into subtasks (if needed). "
-            "Each task should be one clear line (if only one, just return one line):\n\n"
-            f"{optimized_prompt}"
-        )
-        subtasks_response_raw = safe_openai_chat(analysis_prompt)
-        if not subtasks_response_raw:
-            st.stop()
-        subtasks = [t.strip() for t in subtasks_response_raw.split("\n") if t.strip()]
+    st.subheader("Judge")
+    st.code(verdict)
 
-        st.subheader("🧩 Subtasks Identified:")
-        for t in subtasks:
-            st.write(f"- {t}")
+    # Optional escalation
+    if use_openai_if_needed and '"relevance":' in verdict and "10" not in verdict:
+        revised = f"Improve this prompt for the task while preserving structure:
 
-        # Step 3: Assign to best models and run
-        st.info("🤖 Step 3: Assigning to best AI models and generating results...")
-        results = []
-        for subtask in subtasks:
-            model = route_task(subtask)
-            st.write(f"**{subtask} → {model}**")
-            ai_task_prompt = f"[{model}] Execute this task as best as possible:\n{subtask}"
-            ai_response = safe_openai_chat(ai_task_prompt)
-            results.append(
-                f"### Task: {subtask}\n**Model:** {model}\n**Result:**\n{ai_response}\n"
-            )
-
-        # Final merged output
-        st.subheader("🧠 Final Merged Output:")
-        st.markdown("\n\n".join(results))
-
-        # Optionally, allow user to download output
-        st.download_button(
-            label="Download Results",
-            data="\n\n".join(results),
-            file_name="nefron_output.md",
-            mime="text/markdown"
-        )
+{draft}"
+        better = llm_call_openai(revised)
+        st.subheader("Revised (OpenAI)")
+        st.code(better)
