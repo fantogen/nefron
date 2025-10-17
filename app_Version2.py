@@ -1,78 +1,84 @@
 # app.py
-import os
-import time
 import streamlit as st
+
+# SDKs
 from google import genai
 from openai import OpenAI
 
-GEM_MODEL = "gemini-1.5-flash"  # pick a free-tier friendly model from pricing docs
-OPENAI_MODEL = "gpt-4o-mini"    # keep cheap/concise; enforce token caps
+st.title("Secure Prompt Optimizer")
 
-st.title("Prompt Optimizer MVP")
+# 1) Read secrets securely
+gemini_key = st.secrets.get("GEMINI_API_KEY")
+openai_key = st.secrets.get("OPENAI_API_KEY")
 
+# 2) Initialize clients only if keys exist
+gem_client = None
+if gemini_key:
+    gem_client = genai.Client(api_key=gemini_key)  # google-genai SDK
+else:
+    st.info("Add GEMINI_API_KEY to secrets to enable Gemini calls.")
+
+oai_client = None
+if openai_key:
+    oai_client = OpenAI(api_key=openai_key)        # official OpenAI SDK
+else:
+    st.info("Add OPENAI_API_KEY to secrets to enable OpenAI calls.")
+
+# 3) Simple UI
 task = st.text_area("Describe your task")
-style = st.selectbox("Style", ["creative", "step-by-step", "structured"])
-max_tokens = st.slider("Max output tokens", 128, 2048, 512)
-use_openai_if_needed = st.checkbox("Escalate to OpenAI if low quality", value=False)
+model_pref = st.selectbox("Primary model", ["Gemini first", "OpenAI first"])
+max_tokens = st.slider("Max output tokens", 64, 2048, 512)
 
-def draft_prompt(task, style):
-    return f"""
+# 4) Safe helpers
+def call_gemini(prompt: str) -> str:
+    if not gem_client:
+        return "Gemini unavailable: missing GEMINI_API_KEY."
+    try:
+        resp = gem_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
+        return resp.text or ""
+    except Exception as e:
+        return f"Gemini error: {e}"
+
+def call_openai(prompt: str) -> str:
+    if not oai_client:
+        return "OpenAI unavailable: missing OPENAI_API_KEY."
+    try:
+        resp = oai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"OpenAI error: {e}"
+
+# 5) Generate optimized prompt
+if st.button("Generate Prompt"):
+    base = f"""
 You are a prompt engineer.
-Rewrite the following task into a precise, creative prompt with:
-- Clear role and goal
+Rewrite the task into a precise prompt with:
+- Role and goal
 - Step-by-step plan
 - Constraints (tone, format, length)
-- Few-shot examples if useful
-- Verification checklist
+- Optional few-shot hints
+- A verification checklist
 
 Task: {task}
-Style: {style}
-Output: A single optimized prompt string only.
+Output: Only the final optimized prompt text.
 """.strip()
 
-def llm_call_gemini(txt):
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    resp = client.models.generate_content(model=GEM_MODEL, contents=txt)
-    return resp.text
+    if model_pref == "Gemini first":
+        out = call_gemini(base)
+        if "unavailable" in out or "error" in out:
+            out = call_openai(base)
+    else:
+        out = call_openai(base)
+        if "unavailable" in out or "error" in out:
+            out = call_gemini(base)
 
-def llm_call_openai(txt):
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": txt}],
-        max_tokens=max_tokens,
-        temperature=0.7,
-    )
-    return resp.choices[0].message.content
-
-def judge_quality(prompt_str, task):
-    judge_instruction = f"""
-Judge if this optimized prompt will likely solve the task:
-- Criteria: relevance, clarity, constraints, testability (0-10 each)
-- Return: JSON with scores and a brief fix suggestion
-Task: {task}
-Prompt: {prompt_str}
-Only return JSON.
-"""
-    # Cheap judge: Gemini by default
-    return llm_call_gemini(judge_instruction)
-
-if st.button("Generate Prompt"):
-    base = draft_prompt(task, style)
-    # Respect Gemini rate limits: 5 RPM → simple sleep in busy loops; here single call
-    draft = llm_call_gemini(base)
-    verdict = judge_quality(draft, task)
-    st.subheader("Draft")
-    st.code(draft)
-
-    st.subheader("Judge")
-    st.code(verdict)
-
-    # Optional escalation
-    if use_openai_if_needed and '"relevance":' in verdict and "10" not in verdict:
-        revised = f"Improve this prompt for the task while preserving structure:
-
-{draft}"
-        better = llm_call_openai(revised)
-        st.subheader("Revised (OpenAI)")
-        st.code(better)
+    st.subheader("Optimized Prompt")
+    st.code(out)
