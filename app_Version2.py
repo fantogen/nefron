@@ -155,4 +155,20 @@ Return only the new optimized prompt.
             task_lower = user_task.lower()
             if "code" in task_lower or "program" in task_lower:
                 suggestion = ("https://platform.openai.com/", "OpenAI GPT‑4o (for coding & logic heavy tasks)")
-            elif any(x in task_lower for
+            elif any(x in task_lower for x in ["poster", "image", "design", "painting"]):
+                suggestion = ("https://gemini.google.com/", "Gemini (for multimodal creative design)")
+            else:
+                suggestion = ("https://chat.openai.com/", "OpenAI GPT‑4o (balanced creative & reasoning tasks)")
+
+            st.markdown(f"**Recommended model:** [{suggestion[1]}]({suggestion[0]})")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.session_state.history.append({"task": user_task, "optimized": optimized})
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------------------- HISTORY PANEL --------------------
+    if st.session_state.history:
+        st.markdown("<h3 style='margin-top:30px;'>Previous Prompts</h3>", unsafe_allow_html=True)
+        for i, item in enumerate(reversed(st.session_state.history[-3:]), 1):
+            st.markdown(f"<div class='history-box'><b>Task {i}:</b> {item['task']}<br><b>Optimized:</b> {item['optimized'][:150]}...</div>", unsafe_allow_html=True)
