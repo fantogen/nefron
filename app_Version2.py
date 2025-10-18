@@ -1,5 +1,5 @@
 import streamlit as st
-import time
+from streamlit_autorefresh import st_autorefresh
 from google import genai
 from openai import OpenAI
 
@@ -15,10 +15,6 @@ style = """
 @keyframes moveIn {
   0% {opacity: 0; transform: translateY(80px);}
   100% {opacity: 1; transform: translateY(0);}
-}
-@keyframes slowFadeOut {
-  0% {opacity: 1;}
-  100% {opacity: 0;}
 }
 body {
   background-color:#000;
@@ -92,26 +88,30 @@ if "loaded" not in st.session_state:
     st.session_state.loaded = False
 
 if not st.session_state.loaded:
+    # Auto refresh 5 times 1 second apart => ~5 seconds intro
+    count = st_autorefresh(interval=1000, limit=5, key="intro")
+
     st.markdown("<div style='height:40vh'></div>", unsafe_allow_html=True)
     st.markdown("<h1 class='main-logo'>N</h1>", unsafe_allow_html=True)
     st.markdown("<h3 class='app-name'>NEFRON</h3>", unsafe_allow_html=True)
-    time.sleep(3)
-    st.session_state.loaded = True
-    st.experimental_rerun()
 
-# -------------------- MAIN CONTENT --------------------
-st.title("✨ NEFRON - AI Prompt Optimizer")
-st.markdown("<div class='curved-container'>", unsafe_allow_html=True)
+    if count == 5:
+        st.session_state.loaded = True
+        st.experimental_rerun() 
+else:
+    # -------------------- MAIN CONTENT --------------------
+    st.title("✨ NEFRON - AI Prompt Optimizer")
+    st.markdown("<div class='curved-container'>", unsafe_allow_html=True)
 
-if "history" not in st.session_state:
-    st.session_state.history = []
+    if "history" not in st.session_state:
+        st.session_state.history = []
 
-task = st.text_area("Describe your task", placeholder="e.g. Write a sci‑fi story about time travel in 200 words.")
+    task = st.text_area("Describe your task", placeholder="e.g. Write a sci‑fi story about time travel in 200 words.")
 
-if st.button("Generate Optimized Prompt"):
-    user_task = task.strip()
-    if user_task:
-        base_prompt = f"""
+    if st.button("Generate Optimized Prompt"):
+        user_task = task.strip()
+        if user_task:
+            base_prompt = f"""
 Act as a world-class AI prompt engineer.
 Rewrite this user task into an advanced, creative, detailed prompt for an AI model.
 Ensure:
@@ -124,49 +124,35 @@ User task: {user_task}
 Return only the new optimized prompt.
 """.strip()
 
-        gem_client = genai.Client(api_key=st.secrets.get("GEMINI_API_KEY",""))
-        optimized = ""
-        try:
-            resp = gem_client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=base_prompt
+            gem_client = genai.Client(api_key=st.secrets.get("GEMINI_API_KEY",""))
+            optimized = ""
+            try:
+                resp = gem_client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=base_prompt
+                )
+                optimized = resp.text.strip() if resp.text else ""
+            except Exception:
+                oai_client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY",""))
+                resp = oai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role":"user","content":base_prompt}],
+                    max_tokens=700
+                )
+                optimized = resp.choices[0].message.content.strip()
+
+            copy_text = optimized.replace('\n', ' ').replace('"', '\\"')
+
+            st.markdown("<div class='chat-box'>", unsafe_allow_html=True)
+            st.subheader("Optimized Creative Prompt")
+            st.code(optimized, language="none")
+            st.markdown(
+                f'<button class="copy-btn" onclick="navigator.clipboard.writeText(\"{copy_text}\")">Copy Prompt</button>',
+                unsafe_allow_html=True
             )
-            optimized = resp.text.strip()
-        except Exception:
-            client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY",""))
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role":"user","content":base_prompt}],
-                max_tokens=700
-            )
-            optimized = resp.choices[0].message.content.strip()
 
-        st.markdown("<div class='chat-box'>", unsafe_allow_html=True)
-        st.subheader("Optimized Creative Prompt")
-        st.code(optimized, language="none")
-        st.markdown(
-            f"<button class='copy-btn' onclick=\"navigator.clipboard.writeText('{optimized.replace(chr(10),' ')}')\">Copy Prompt</button>",
-            unsafe_allow_html=True
-        )
-
-        # Suggest AI model based on intent
-        task_lower = user_task.lower()
-        if "code" in task_lower or "program" in task_lower:
-            suggestion = ("https://platform.openai.com/","OpenAI GPT‑4o (for coding & logic heavy tasks)")
-        elif any(x in task_lower for x in ["poster","image","design","painting"]):
-            suggestion = ("https://gemini.google.com/","Gemini (for multimodal creative design)")
-        else:
-            suggestion = ("https://chat.openai.com/","OpenAI GPT‑4o (balanced creative & reasoning tasks)")
-
-        st.markdown(f"**Recommended model:** [{suggestion[1]}]({suggestion[0]})")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.session_state.history.append({"task": user_task, "optimized": optimized})
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-# -------------------- HISTORY PANEL --------------------
-if st.session_state.history:
-    st.markdown("<h3 style='margin-top:30px;'>Previous Prompts</h3>", unsafe_allow_html=True)
-    for i, item in enumerate(reversed(st.session_state.history[-3:]), 1):
-        st.markdown(f"<div class='history-box'><b>Task {i}:</b> {item['task']}<br><b>Optimized:</b> {item['optimized'][:150]}...</div>", unsafe_allow_html=True)
+            # Suggest AI model based on intent
+            task_lower = user_task.lower()
+            if "code" in task_lower or "program" in task_lower:
+                suggestion = ("https://platform.openai.com/", "OpenAI GPT‑4o (for coding & logic heavy tasks)")
+            elif any(x in task_lower for
